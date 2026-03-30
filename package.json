@@ -1,0 +1,147 @@
+{
+  "name": "tab-rocket",
+  "displayName": "TabRocket - AI Tab Completions",
+  "description": "Rocket-powered AI tab completions!",
+  "author": "Kevsnz",
+  "publisher": "Kevsnz",
+  "icon": "icon.png",
+  "version": "1.1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Kevsnz/tab-rocket"
+  },
+  "pricing": "Free",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.97.0"
+  },
+  "extensionKind": [
+    "ui",
+    "workspace"
+  ],
+  "categories": [
+    "AI",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "tab",
+    "autocomplete",
+    "autocompletion",
+    "tab-completion",
+    "ai",
+    "fim"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "tabRocket.manageCompletions",
+        "title": "Manage Completions",
+        "category": "TabRocket"
+      },
+      {
+        "command": "tabRocket.setApiKey",
+        "title": "Set API Key",
+        "category": "TabRocket"
+      },
+      {
+        "command": "tabRocket.clearApiKey",
+        "title": "Clear API Key",
+        "category": "TabRocket"
+      }
+    ],
+    "configuration": {
+      "title": "TabRocket",
+      "properties": {
+        "tabRocket.baseUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:1234/v1",
+          "description": "Base URL for the OpenAI-compatible completions API."
+        },
+        "tabRocket.model": {
+          "type": "string",
+          "default": "qwen3-coder-30b",
+          "description": "Model name used for inline completion requests."
+        },
+        "tabRocket.promptTemplate": {
+          "type": "string",
+          "default": "qwen",
+          "enum": [
+            "qwen",
+            "codestral",
+            "seedcoder",
+            "stablecode"
+          ],
+          "enumDescriptions": [
+            "Qwen3-Coder, Qwen2.5-Coder, Granite 4.0, CodeGemma",
+            "Codestral",
+            "SeedCoder",
+            "StableCode, StarCoder 2"
+          ],
+          "description": "Template used to render the prompt for completion requests."
+        },
+        "tabRocket.prefixContextMaxLength": {
+          "type": "number",
+          "default": 4000,
+          "minimum": 10,
+          "description": "Maximum number of characters included from the text before the cursor in completion requests."
+        },
+        "tabRocket.suffixContextMaxLength": {
+          "type": "number",
+          "default": 4000,
+          "minimum": 0,
+          "description": "Maximum number of characters included from the text after the cursor in completion requests."
+        },
+        "tabRocket.debounceMs": {
+          "type": "number",
+          "default": 250,
+          "minimum": 50,
+          "maximum": 1000,
+          "description": "Minimum time interval between completion requests (milliseconds)."
+        },
+        "tabRocket.forbiddenFileNames": {
+          "type": "array",
+          "default": [
+            ".env"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "File names or glob patterns where TabRocket completions are disabled, such as .env, .env.*, or secrets/**/*.pem."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "package": "npm run check-types && node esbuild.js --production",
+    "check-types": "tsc --noEmit",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/micromatch": "^4.0.10",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "20.x",
+    "@types/vscode": "^1.97.0",
+    "@typescript-eslint/eslint-plugin": "^8.22.0",
+    "@typescript-eslint/parser": "^8.22.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1",
+    "esbuild": "^0.27.4",
+    "eslint": "^9.19.0",
+    "typescript": "^5.7.3"
+  },
+  "dependencies": {
+    "micromatch": "^4.0.8",
+    "openai": "^6.27.0",
+    "tree-sitter-python": "^0.25.0",
+    "web-tree-sitter": "^0.26.7"
+  }
+}
