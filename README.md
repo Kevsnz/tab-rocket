@@ -6,7 +6,7 @@ Use any FIM-capable model to power TabRocket completions over the OpenAI-compati
 
 Supports Qwen3-Coder, Qwen3-Coder-Next, Qwen2.5-Coder, SeedCoder, Granite 4, StarCoder2, Stable Code, CodeGemma.
 
-Works best with Python.
+Works best with Python, TypeScript and TypeScript TSX.
 
 ## Setup
 

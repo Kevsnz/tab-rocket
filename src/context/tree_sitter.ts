@@ -2,8 +2,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import TreeSitter = require('web-tree-sitter');
 
+type SupportedLanguage = 'python' | 'typescript' | 'tsx';
+
 let runtimeInitialization: Promise<void> | null = null;
-let pythonLanguageInitialization: Promise<TreeSitter.Language> | null = null;
+const languageInitializations = new Map<SupportedLanguage, Promise<TreeSitter.Language>>();
 
 function getBundledAssetsDirectory(): string {
     const currentDirectoryAssets = path.join(__dirname, 'tree-sitter');
@@ -18,8 +20,13 @@ function getRuntimeWasmPath(): string {
     return path.join(getBundledAssetsDirectory(), 'web-tree-sitter.wasm');
 }
 
-function getPythonGrammarWasmPath(): string {
-    return path.join(getBundledAssetsDirectory(), 'tree-sitter-python.wasm');
+function getGrammarWasmPath(language: SupportedLanguage): string {
+    const fileName = language === 'python'
+        ? 'tree-sitter-python.wasm'
+        : language === 'typescript'
+            ? 'tree-sitter-typescript.wasm'
+            : 'tree-sitter-tsx.wasm';
+    return path.join(getBundledAssetsDirectory(), fileName);
 }
 
 async function initializeRuntime(): Promise<void> {
@@ -41,35 +48,61 @@ async function initializeRuntime(): Promise<void> {
     return await runtimeInitialization;
 }
 
-async function getPythonLanguage(): Promise<TreeSitter.Language> {
-    if (pythonLanguageInitialization !== null) {
-        return await pythonLanguageInitialization;
+async function getLanguage(language: SupportedLanguage): Promise<TreeSitter.Language> {
+    const existingInitialization = languageInitializations.get(language);
+    if (existingInitialization !== undefined) {
+        return await existingInitialization;
     }
 
-    pythonLanguageInitialization = (async () => {
+    const initialization = (async () => {
         await initializeRuntime();
-        return await TreeSitter.Language.load(getPythonGrammarWasmPath());
+        return await TreeSitter.Language.load(getGrammarWasmPath(language));
     })();
+    languageInitializations.set(language, initialization);
 
-    return await pythonLanguageInitialization;
+    return await initialization;
 }
 
-export async function createPythonParser(): Promise<TreeSitter.Parser> {
+async function createParser(language: SupportedLanguage): Promise<TreeSitter.Parser> {
     await initializeRuntime();
     const parser = new TreeSitter.Parser();
-    parser.setLanguage(await getPythonLanguage());
+    parser.setLanguage(await getLanguage(language));
     return parser;
 }
 
-export async function parsePython(source: string, abort?: AbortSignal): Promise<TreeSitter.Tree> {
-    const parser = await createPythonParser();
+async function parseSource(language: SupportedLanguage, source: string, abort?: AbortSignal): Promise<TreeSitter.Tree> {
+    const parser = await createParser(language);
     const tree = parser.parse(source, undefined, abort ? {
         progressCallback: () => abort.aborted,
     } : undefined);
 
     if (tree === null) {
-        throw new Error(abort?.aborted ? 'Python parsing aborted.' : 'Python parsing failed.');
+        throw new Error(abort?.aborted ? `${language} parsing aborted.` : `${language} parsing failed.`);
     }
 
     return tree;
+}
+
+export async function createPythonParser(): Promise<TreeSitter.Parser> {
+    return await createParser('python');
+}
+
+export async function createTypeScriptParser(): Promise<TreeSitter.Parser> {
+    return await createParser('typescript');
+}
+
+export async function createTsxParser(): Promise<TreeSitter.Parser> {
+    return await createParser('tsx');
+}
+
+export async function parsePython(source: string, abort?: AbortSignal): Promise<TreeSitter.Tree> {
+    return await parseSource('python', source, abort);
+}
+
+export async function parseTypeScript(source: string, abort?: AbortSignal): Promise<TreeSitter.Tree> {
+    return await parseSource('typescript', source, abort);
+}
+
+export async function parseTsx(source: string, abort?: AbortSignal): Promise<TreeSitter.Tree> {
+    return await parseSource('tsx', source, abort);
 }

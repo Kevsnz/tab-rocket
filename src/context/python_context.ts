@@ -1,12 +1,14 @@
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import { TextDocument, Uri, workspace } from 'vscode';
+import { TextDocument } from 'vscode';
 import type { Node } from 'web-tree-sitter';
+import {
+    deduplicatePaths,
+    defaultMaxImportedFiles,
+    PrefixAugmentationProvider,
+} from './provider_shared';
 import { parsePython } from './tree_sitter';
 
-const maxImportedFiles = 10;
-const maxSymbolsPerFile = 20;
-const maxImportedFileSizeBytes = 64 * 1024;
 const includedDunderMethods = new Set([
     '__init__',
     '__new__',
@@ -267,10 +269,6 @@ export async function extractPythonSymbols(source: string, abort?: AbortSignal):
     }
 }
 
-function deduplicatePaths(paths: string[]): string[] {
-    return [...new Set(paths)];
-}
-
 async function pathExists(filePath: string): Promise<boolean> {
     try {
         await fs.access(filePath);
@@ -357,73 +355,29 @@ export async function resolvePythonImportPaths(
             resolvedPaths.push(path.normalize(resolvedPath));
         }
 
-        if (resolvedPaths.length >= maxImportedFiles) {
+        if (resolvedPaths.length >= defaultMaxImportedFiles) {
             break;
         }
     }
 
-    return deduplicatePaths(resolvedPaths).slice(0, maxImportedFiles);
-}
-
-function isFileInsideWorkspace(filePath: string, workspaceRoots: string[]): boolean {
-    const normalizedFilePath = path.resolve(filePath);
-    return workspaceRoots.some((workspaceRoot) => {
-        const normalizedWorkspaceRoot = path.resolve(workspaceRoot);
-        const relativePath = path.relative(normalizedWorkspaceRoot, normalizedFilePath);
-        return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
-    });
-}
-
-async function readContextFile(filePath: string): Promise<string | null> {
-    const openDocument = workspace.textDocuments.find((document) => document.uri.scheme === 'file' && document.uri.fsPath === filePath);
-    if (openDocument !== undefined) {
-        return openDocument.getText();
-    }
-
-    const stats = await fs.stat(filePath);
-    if (!stats.isFile() || stats.size > maxImportedFileSizeBytes) {
-        return null;
-    }
-
-    return await fs.readFile(filePath, 'utf8');
+    return deduplicatePaths(resolvedPaths).slice(0, defaultMaxImportedFiles);
 }
 
 export function formatPythonContextBlock(fileName: string, symbols: string[]): string {
     return `# ${fileName}\n${symbols.join('\n')}`;
 }
 
-export async function buildPythonImportedContext(document: TextDocument, abort: AbortSignal): Promise<string> {
-    if (document.languageId !== 'python' || document.uri.scheme !== 'file') {
-        return '';
-    }
-
-    const workspaceRoots = workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
-    if (workspaceRoots.length === 0) {
-        return '';
-    }
-
-    const imports = await extractPythonImports(document.getText(), abort);
-    const resolvedPaths = await resolvePythonImportPaths(document.uri.fsPath, workspaceRoots, imports);
-
-    const blocks: string[] = [];
-    for (const resolvedPath of resolvedPaths) {
-        if (abort.aborted || !isFileInsideWorkspace(resolvedPath, workspaceRoots)) {
-            break;
-        }
-
-        const content = await readContextFile(resolvedPath);
-        if (content === null) {
-            continue;
-        }
-
-        const symbols = (await extractPythonSymbols(content, abort)).slice(0, maxSymbolsPerFile);
-        if (symbols.length === 0) {
-            continue;
-        }
-
-        const fileName = workspace.asRelativePath(Uri.file(resolvedPath), false);
-        blocks.push(formatPythonContextBlock(fileName, symbols));
-    }
-
-    return blocks.join('\n\n');
+export function formatPythonActiveFileBlock(fileName: string, prefix: string): string {
+    return `# ${fileName}\n${prefix}`;
 }
+
+export const pythonPrefixAugmentationProvider: PrefixAugmentationProvider<PythonImport> = {
+    supports(document: TextDocument): boolean {
+        return document.languageId === 'python' && document.uri.scheme === 'file';
+    },
+    collectImports: extractPythonImports,
+    resolveImportPaths: resolvePythonImportPaths,
+    extractSymbols: extractPythonSymbols,
+    formatContextBlock: formatPythonContextBlock,
+    formatActiveFileBlock: formatPythonActiveFileBlock,
+};

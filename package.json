@@ -5,7 +5,7 @@
   "author": "Kevsnz",
   "publisher": "Kevsnz",
   "icon": "icon.png",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/Kevsnz/tab-rocket"
@@ -118,8 +118,10 @@
   "scripts": {
     "vscode:prepublish": "npm run package",
     "package": "npm run check-types && node esbuild.js --production",
+    "clean": "node -e \"const fs=require('fs'); const path=require('path'); const root='out'; const remove=(dir)=>{ if(!fs.existsSync(dir)) return; for (const entry of fs.readdirSync(dir,{withFileTypes:true})) { const full=path.join(dir, entry.name); if (entry.isDirectory()) { remove(full); continue; } if (entry.name.endsWith('.js') || entry.name.endsWith('.js.map')) fs.rmSync(full, { force: true }); } }; remove(root);\"",
+    "copy-tree-sitter-assets": "node scripts/copy_tree_sitter_assets.js",
     "check-types": "tsc --noEmit",
-    "compile": "tsc -p ./",
+    "compile": "npm run clean && tsc -p ./ && npm run copy-tree-sitter-assets",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src",
@@ -142,6 +144,7 @@
     "micromatch": "^4.0.8",
     "openai": "^6.27.0",
     "tree-sitter-python": "^0.25.0",
+    "tree-sitter-typescript": "^0.23.2",
     "web-tree-sitter": "^0.26.7"
   }
 }

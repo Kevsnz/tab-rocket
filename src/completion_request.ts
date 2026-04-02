@@ -1,19 +1,10 @@
 import OpenAI from 'openai';
-import { Position, Range, TextDocument, workspace } from 'vscode';
+import { Position, Range, TextDocument } from 'vscode';
 import { TabRocketConfig } from './config';
-import { buildPythonImportedContext } from './context/python_context';
+import { augmentDocumentPrefix } from './context/prefix_augmentation';
 import { log } from './logger';
 import { getReservedPromptTokens, renderInfillPrompt } from './prompt_renderer';
 import { performance } from 'perf_hooks';
-
-export function formatPythonAugmentedPrefix(fileName: string, prefix: string, importedContext: string): string {
-    const activeFileBlock = `# ${fileName}\n${prefix}`;
-    if (importedContext.length === 0) {
-        return activeFileBlock;
-    }
-
-    return `${importedContext}\n\n${activeFileBlock}`;
-}
 
 export class CompletionText {
     text: string;
@@ -99,21 +90,15 @@ export class CompletionRequest {
     }
 
     private async augmentPrefix(document: TextDocument, prefix: string, abort: AbortSignal): Promise<string> {
-        if (document.languageId !== 'python' || document.uri.scheme !== 'file') {
-            return prefix;
-        }
-
         try {
-            const importedContext = await buildPythonImportedContext(document, abort);
-            const fileName = workspace.asRelativePath(document.uri, false);
-            return formatPythonAugmentedPrefix(fileName, prefix, importedContext);
+            return await augmentDocumentPrefix(document, prefix, abort);
         } catch (error: unknown) {
             if (abort.aborted) {
                 return prefix;
             }
 
             const message = error instanceof Error ? error.message : String(error);
-            log('Failed to build Python imported context: ' + message);
+            log('Failed to augment prefix with imported context: ' + message);
             return prefix;
         }
     }
