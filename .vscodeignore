@@ -13,5 +13,6 @@ dist/
 node_modules/
 esbuild.js
 out/
+scripts/
 !out/extension.js
 !out/tree-sitter/**
