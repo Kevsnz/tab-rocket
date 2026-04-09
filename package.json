@@ -5,7 +5,7 @@
   "author": "Kevsnz",
   "publisher": "Kevsnz",
   "icon": "icon.png",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/Kevsnz/tab-rocket"
@@ -85,13 +85,13 @@
         },
         "tabRocket.prefixContextMaxLength": {
           "type": "number",
-          "default": 4000,
-          "minimum": 10,
+          "default": 8000,
+          "minimum": 500,
           "description": "Maximum number of characters included from the text before the cursor in completion requests."
         },
         "tabRocket.suffixContextMaxLength": {
           "type": "number",
-          "default": 4000,
+          "default": 2000,
           "minimum": 0,
           "description": "Maximum number of characters included from the text after the cursor in completion requests."
         },
@@ -143,6 +143,7 @@
   "dependencies": {
     "micromatch": "^4.0.8",
     "openai": "^6.27.0",
+    "tree-sitter-go": "^0.25.0",
     "tree-sitter-python": "^0.25.0",
     "tree-sitter-typescript": "^0.23.2",
     "web-tree-sitter": "^0.26.7"

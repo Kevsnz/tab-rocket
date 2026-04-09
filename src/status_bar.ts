@@ -54,36 +54,36 @@ export class TabRocketStatusBar implements Disposable {
     private refresh() {
         if (!this.completionState.isEnabled()) {
             this.statusBarItem.text = disabledText;
-            this.statusBarItem.tooltip = 'Disabled';
+            this.statusBarItem.tooltip = 'Disabled. Click for controls.';
             return;
         }
 
         if (this.completionState.isSnoozed()) {
             this.statusBarItem.text = snoozedText;
-            this.statusBarItem.tooltip = `Snoozed until ${formatLocalTime(this.completionState.getSnoozeUntil())}`;
+            this.statusBarItem.tooltip = `Snoozed until ${formatLocalTime(this.completionState.getSnoozeUntil())}. Click for controls.`;
             return;
         }
 
         if (this.mode === 'error' && this.errorMessage) {
             this.statusBarItem.text = errorText;
-            this.statusBarItem.tooltip = this.errorMessage;
+            this.statusBarItem.tooltip = 'Error. Click for controls.';
             return;
         }
 
         if (this.mode === 'loading') {
             this.statusBarItem.text = loadingText;
-            this.statusBarItem.tooltip = 'Working...';
+            this.statusBarItem.tooltip = 'Working... Click for controls.';
             return;
         }
 
         if (this.mode === 'forbidden' && this.forbiddenMessage) {
             this.statusBarItem.text = disabledText;
-            this.statusBarItem.tooltip = this.forbiddenMessage;
+            this.statusBarItem.tooltip = 'Disabled. Click for controls.';
             return;
         }
 
         this.statusBarItem.text = idleText;
-        this.statusBarItem.tooltip = 'Ready';
+        this.statusBarItem.tooltip = 'Ready! Click for controls.';
     }
     dispose() {
         this.stateListener.dispose();

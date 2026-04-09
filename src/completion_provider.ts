@@ -61,6 +61,24 @@ class Completion {
     }
 }
 
+export function createInlineCompletionItem(document: TextDocument, completion: Completion, position: Position): InlineCompletionItem {
+    const range = new Range(
+        completion.startPosition,
+        completion.toLineEnd ? document.lineAt(completion.startPosition.line).range.end : position,
+    );
+
+    const item = new InlineCompletionItem(completion.completionText, range);
+
+    const replacedText = document.getText(range);
+    if (replacedText.length > 0 && !completion.completionText.startsWith(replacedText)) {
+        item.filterText = replacedText + completion.completionText;
+    }
+
+    return item;
+}
+
+const setApiKeyAction = 'Set API Key';
+
 export class CompletionProvider implements InlineCompletionItemProvider, Disposable {
     client: OpenAI;
     config: TabRocketConfig;
@@ -107,6 +125,7 @@ export class CompletionProvider implements InlineCompletionItemProvider, Disposa
 
     public async refreshConfig() {
         this.cancelActiveRequests();
+        this.lastErrorMessage = null;
         this.config = getTabRocketConfig();
         this.client = this.createClient(this.config, await this.apiKeyStore.get());
         log('Updated configuration');
@@ -200,7 +219,7 @@ export class CompletionProvider implements InlineCompletionItemProvider, Disposa
 
             if (this.lastErrorMessage !== message) {
                 this.lastErrorMessage = message;
-                window.showErrorMessage(message);
+                await this.showRequestError(message, error);
             }
 
             return null;
@@ -215,6 +234,18 @@ export class CompletionProvider implements InlineCompletionItemProvider, Disposa
         return token.isCancellationRequested
             || error instanceof APIUserAbortError
             || (error instanceof Error && error.name === 'AbortError');
+    }
+
+    private async showRequestError(message: string, error: unknown): Promise<void> {
+        if (error instanceof APIError && error.status === 401) {
+            const selection = await window.showErrorMessage(message, setApiKeyAction);
+            if (selection === setApiKeyAction) {
+                await this.apiKeyStore.promptForApiKey();
+            }
+            return;
+        }
+
+        await window.showErrorMessage(message);
     }
 
     private formatRequestError(error: unknown): string {
@@ -292,13 +323,7 @@ export class CompletionProvider implements InlineCompletionItemProvider, Disposa
 
         if (this.activeCompletion !== null) {
             if (this.activeCompletion.stillValid(document, position)) {
-                return [new InlineCompletionItem(
-                    this.activeCompletion.completionText,
-                    new Range(
-                        this.activeCompletion.startPosition,
-                        this.activeCompletion.toLineEnd ? document.lineAt(position.line).range.end : position,
-                    )
-                )];
+                return [createInlineCompletionItem(document, this.activeCompletion, position)];
             }
             this.activeCompletion = null;
         }
@@ -318,13 +343,7 @@ export class CompletionProvider implements InlineCompletionItemProvider, Disposa
             }
         }
 
-        const completion = [new InlineCompletionItem(
-            this.activeCompletion.completionText,
-            new Range(
-                this.activeCompletion.startPosition,
-                this.activeCompletion.toLineEnd ? document.lineAt(position.line).range.end : position,
-            )
-        )];
+        const completion = [createInlineCompletionItem(document, this.activeCompletion, position)];
 
         if (token.isCancellationRequested) {
             log('Providing completion NOT');

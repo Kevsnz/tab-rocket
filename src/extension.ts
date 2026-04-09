@@ -29,7 +29,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		statusBar,
 		provider,
 		vscode.commands.registerCommand(manageCompletionsCommand, async () => {
-			await showCompletionControls(completionState);
+			await showCompletionControls(completionState, apiKeyStore);
 		}),
 		vscode.commands.registerCommand(setApiKeyCommand, async () => {
 			await apiKeyStore.promptForApiKey();

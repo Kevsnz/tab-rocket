@@ -33,15 +33,39 @@ suite('prefix augmentation', () => {
         const prefix = await augmentDocumentPrefix(
             createDocument('javascript', '/workspace/main.js'),
             'const value = 1;',
+            100,
             new AbortController().signal,
         );
 
         assert.strictEqual(prefix, 'const value = 1;');
     });
 
-    test('registers Python and TypeScript prefix augmentation providers', () => {
+    test('limits unsupported document prefix by final prefix length', async () => {
+        const prefix = await augmentDocumentPrefix(
+            createDocument('javascript', '/workspace/main.js'),
+            'const value = 12345;',
+            5,
+            new AbortController().signal,
+        );
+
+        assert.strictEqual(prefix, '2345;');
+    });
+
+    test('returns empty prefix when final prefix length is zero', async () => {
+        const prefix = await augmentDocumentPrefix(
+            createDocument('javascript', '/workspace/main.js'),
+            'const value = 1;',
+            0,
+            new AbortController().signal,
+        );
+
+        assert.strictEqual(prefix, '');
+    });
+
+    test('registers Go, Python, and TypeScript prefix augmentation providers', () => {
         const providers = getPrefixAugmentationProviders();
 
+        assert.ok(providers.some((provider) => provider.supports(createDocument('go', '/workspace/main.go'))));
         assert.ok(providers.some((provider) => provider.supports(createDocument('python', '/workspace/main.py'))));
         assert.ok(providers.some((provider) => provider.supports(createDocument('typescript', '/workspace/main.ts'))));
         assert.ok(providers.some((provider) => provider.supports(createDocument('typescriptreact', '/workspace/App.tsx'))));

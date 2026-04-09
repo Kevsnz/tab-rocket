@@ -33,11 +33,7 @@ suite('provider shared', () => {
                 hookCalls += 1;
                 return [{ module: 'service' }];
             },
-            async resolveImportPaths(): Promise<string[]> {
-                hookCalls += 1;
-                return [];
-            },
-            async extractSymbols(): Promise<string[]> {
+            async resolveImportTargets() {
                 hookCalls += 1;
                 return [];
             },
@@ -54,6 +50,7 @@ suite('provider shared', () => {
         const importedContext = await buildImportedContext(
             provider,
             createDocument('python', '/workspace/main.py', 'from service import helper'),
+            100,
             new AbortController().signal,
         );
 
@@ -71,11 +68,7 @@ suite('provider shared', () => {
                 hookCalls += 1;
                 return [];
             },
-            async resolveImportPaths(): Promise<string[]> {
-                hookCalls += 1;
-                return [];
-            },
-            async extractSymbols(): Promise<string[]> {
+            async resolveImportTargets() {
                 hookCalls += 1;
                 return [];
             },
@@ -92,6 +85,7 @@ suite('provider shared', () => {
         const importedContext = await buildImportedContext(
             provider,
             createDocument('typescript', '/workspace/main.ts', 'const value = 1;'),
+            100,
             new AbortController().signal,
         );
 
@@ -99,7 +93,7 @@ suite('provider shared', () => {
         assert.strictEqual(hookCalls, 0);
     });
 
-    test('collects imported context blocks while skipping empty and out-of-workspace files', async () => {
+    test('collects imported context blocks while skipping empty and out-of-workspace targets', async () => {
         const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), 'tab-rocket-provider-shared-workspace-'));
         const outsideRoot = await mkdtemp(path.join(os.tmpdir(), 'tab-rocket-provider-shared-outside-'));
 
@@ -111,23 +105,19 @@ suite('provider shared', () => {
             const validSymbolsPath = path.join(insideDirectory, 'service.py');
             const outsidePath = path.join(outsideRoot, 'outside.py');
 
-            await writeFile(emptySymbolsPath, 'NO_SYMBOLS\n', 'utf8');
+            await writeFile(emptySymbolsPath, 'local_var = 1\n', 'utf8');
             await writeFile(validSymbolsPath, 'VALUE = 1\n', 'utf8');
             await writeFile(outsidePath, 'VALUE = 2\n', 'utf8');
 
             const blocks = await collectImportedContextBlocks({
-                resolvedPaths: [emptySymbolsPath, validSymbolsPath, outsidePath],
+                resolvedTargets: [
+                    { filePaths: [emptySymbolsPath] },
+                    { filePaths: [validSymbolsPath] },
+                    { filePaths: [outsidePath] },
+                ],
                 workspaceRoots: [workspaceRoot],
                 abort: new AbortController().signal,
-                maxFileSizeBytes: 1024,
-                maxSymbolsPerFile: 10,
-                async extractSymbols(source: string): Promise<string[]> {
-                    if (source.includes('NO_SYMBOLS')) {
-                        return [];
-                    }
-
-                    return ['VALUE = ...'];
-                },
+                maxLength: 1000,
                 formatContextBlock(fileName: string, symbols: string[]): string {
                     return `# ${fileName}\n${symbols.join('\n')}`;
                 },
@@ -140,28 +130,58 @@ suite('provider shared', () => {
         }
     });
 
-    test('limits symbols per imported file during block collection', async () => {
+    test('aggregates symbols across multiple files in one target', async () => {
         const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), 'tab-rocket-provider-shared-workspace-'));
 
         try {
-            const importedFilePath = path.join(workspaceRoot, 'service.py');
-            await writeFile(importedFilePath, 'symbols\n', 'utf8');
+            const firstFilePath = path.join(workspaceRoot, 'service.py');
+            const secondFilePath = path.join(workspaceRoot, 'service_extra.py');
+            await writeFile(firstFilePath, 'A = 1\nB = 2\n', 'utf8');
+            await writeFile(secondFilePath, 'C = 3\n', 'utf8');
 
             const blocks = await collectImportedContextBlocks({
-                resolvedPaths: [importedFilePath],
+                resolvedTargets: [{
+                    displayName: 'pkg/service',
+                    filePaths: [firstFilePath, secondFilePath],
+                }],
                 workspaceRoots: [workspaceRoot],
                 abort: new AbortController().signal,
-                maxFileSizeBytes: 1024,
-                maxSymbolsPerFile: 2,
-                async extractSymbols(): Promise<string[]> {
-                    return ['A = ...', 'B = ...', 'C = ...'];
-                },
+                maxLength: 100,
                 formatContextBlock(fileName: string, symbols: string[]): string {
                     return `# ${fileName}\n${symbols.join('\n')}`;
                 },
             });
 
-            assert.deepStrictEqual(blocks, [`# ${importedFilePath}\nA = ...\nB = ...`]);
+            assert.deepStrictEqual(blocks, ['# pkg/service\nA = ...\nB = ...\nC = ...']);
+        } finally {
+            await rm(workspaceRoot, { recursive: true, force: true });
+        }
+    });
+
+    test('limits imported context blocks by max length during collection', async () => {
+        const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), 'tab-rocket-provider-shared-workspace-'));
+
+        try {
+            const firstFilePath = path.join(workspaceRoot, 'service.py');
+            const secondFilePath = path.join(workspaceRoot, 'service_extra.py');
+            await writeFile(firstFilePath, 'A = 1\nB = 2\n', 'utf8');
+            await writeFile(secondFilePath, 'C = 3\n', 'utf8');
+            const expectedBlock = '# pkg/service\nA = ...\nB = ...';
+
+            const blocks = await collectImportedContextBlocks({
+                resolvedTargets: [{
+                    displayName: 'pkg/service',
+                    filePaths: [firstFilePath, secondFilePath],
+                }],
+                workspaceRoots: [workspaceRoot],
+                abort: new AbortController().signal,
+                maxLength: expectedBlock.length,
+                formatContextBlock(fileName: string, symbols: string[]): string {
+                    return `# ${fileName}\n${symbols.join('\n')}`;
+                },
+            });
+
+            assert.deepStrictEqual(blocks, [expectedBlock]);
         } finally {
             await rm(workspaceRoot, { recursive: true, force: true });
         }

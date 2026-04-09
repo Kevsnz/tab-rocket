@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 
+import { TabRocketApiKeyStore } from './api_key_storage';
 import { CompletionStateController } from './completion_state';
 import { formatLocalTime } from './time';
 
@@ -7,16 +8,22 @@ const snoozeAction = 'Snooze 30 Minutes';
 const disableAction = 'Disable Completions';
 const enableAction = 'Enable Completions';
 const resumeAction = 'Resume Now';
+const setApiKeyAction = 'Set API Key';
 
-export async function showCompletionControls(completionState: CompletionStateController) {
+export async function showCompletionControls(completionState: CompletionStateController, apiKeyStore: TabRocketApiKeyStore) {
     if (!completionState.isEnabled()) {
         const selection = await vscode.window.showInformationMessage(
             'TabRocket completions are disabled.',
             enableAction,
+            setApiKeyAction,
         );
 
         if (selection === enableAction) {
             await completionState.enable();
+        }
+
+        if (selection === setApiKeyAction) {
+            await apiKeyStore.promptForApiKey();
         }
 
         return;
@@ -27,6 +34,7 @@ export async function showCompletionControls(completionState: CompletionStateCon
             `TabRocket completions are snoozed until ${formatLocalTime(completionState.getSnoozeUntil())}.`,
             resumeAction,
             disableAction,
+            setApiKeyAction,
         );
 
         if (selection === resumeAction) {
@@ -37,6 +45,10 @@ export async function showCompletionControls(completionState: CompletionStateCon
             await completionState.disable();
         }
 
+        if (selection === setApiKeyAction) {
+            await apiKeyStore.promptForApiKey();
+        }
+
         return;
     }
 
@@ -44,6 +56,7 @@ export async function showCompletionControls(completionState: CompletionStateCon
         'TabRocket completions are enabled.',
         snoozeAction,
         disableAction,
+        setApiKeyAction,
     );
 
     if (selection === snoozeAction) {
@@ -52,5 +65,9 @@ export async function showCompletionControls(completionState: CompletionStateCon
 
     if (selection === disableAction) {
         await completionState.disable();
+    }
+
+    if (selection === setApiKeyAction) {
+        await apiKeyStore.promptForApiKey();
     }
 }

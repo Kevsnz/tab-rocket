@@ -79,27 +79,31 @@ export class CompletionRequest {
             document.lineCount - 1,
             document.lineAt(document.lineCount - 1).text.length,
         ));
-        const prefix = this.limitPrefixContext(fullPrefix);
         const suffix = this.limitSuffixContext(fullSuffix);
 
+        if (fullPrefix.length === 0 && suffix.length === 0) {
+            return [null, null];
+        }
+
+        const prefix = await this.augmentPrefix(document, fullPrefix, abort);
         if (prefix.length === 0 && suffix.length === 0) {
             return [null, null];
         }
 
-        return [await this.augmentPrefix(document, prefix, abort), suffix];
+        return [prefix, suffix];
     }
 
     private async augmentPrefix(document: TextDocument, prefix: string, abort: AbortSignal): Promise<string> {
         try {
-            return await augmentDocumentPrefix(document, prefix, abort);
+            return await augmentDocumentPrefix(document, prefix, this.prefixContextMaxLength, abort);
         } catch (error: unknown) {
             if (abort.aborted) {
-                return prefix;
+                return this.limitPrefixContext(prefix);
             }
 
             const message = error instanceof Error ? error.message : String(error);
             log('Failed to augment prefix with imported context: ' + message);
-            return prefix;
+            return this.limitPrefixContext(prefix);
         }
     }
 
@@ -156,15 +160,19 @@ export class CompletionRequest {
             completion += chunk.choices[0].text;
 
             const leadingWhitespaceLength = completion.length - completion.trimStart().length;
-            const lineEnd = completion.indexOf('\n', leadingWhitespaceLength);
-            if (lineEnd !== -1) {
+
+            const newLinePos = completion.indexOf('\n', leadingWhitespaceLength);
+            const crPos = completion.indexOf('\r', leadingWhitespaceLength);
+
+            const lineEnd = Math.min(newLinePos === -1 ? completion.length : newLinePos, crPos === -1 ? completion.length : crPos);
+            if (lineEnd < completion.length) {
                 completion = completion.substring(0, lineEnd);
                 tolineEnd = true;
                 break;
             }
         }
 
-        log('Received completion: "' + completion + '"' + (tolineEnd ? ' (to line end)' : ''));
+        log('Received completion: ' + JSON.stringify(completion) + (tolineEnd ? ' (to line end)' : ''));
         return new CompletionText(completion.trim().length === 0 ? '' : completion, tolineEnd);
     }
 

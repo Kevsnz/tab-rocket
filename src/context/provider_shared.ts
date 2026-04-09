@@ -1,16 +1,20 @@
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { TextDocument, Uri, workspace } from 'vscode';
+import { fileContextRegistry } from './file_context_registry';
 
 export const defaultMaxImportedFiles = 10;
-export const defaultMaxSymbolsPerFile = 20;
 export const defaultMaxImportedFileSizeBytes = 64 * 1024;
+
+export type ImportedContextTarget = {
+    filePaths: string[];
+    displayName?: string;
+};
 
 export type PrefixAugmentationProvider<TImport> = {
     supports(document: TextDocument): boolean;
     collectImports(source: string, abort?: AbortSignal, document?: TextDocument): Promise<TImport[]>;
-    resolveImportPaths(documentPath: string, workspaceRoots: string[], imports: TImport[]): Promise<string[]>;
-    extractSymbols(source: string, abort?: AbortSignal, filePath?: string): Promise<string[]>;
+    resolveImportTargets(documentPath: string, workspaceRoots: string[], imports: TImport[]): Promise<ImportedContextTarget[]>;
     formatContextBlock(fileName: string, symbols: string[]): string;
     formatActiveFileBlock(fileName: string, prefix: string): string;
 };
@@ -30,52 +34,78 @@ export function isPathInsideWorkspace(filePath: string, workspaceRoots: string[]
     });
 }
 
-export async function readWorkspaceContextFile(filePath: string, maxFileSizeBytes: number): Promise<string | null> {
-    const openDocument = workspace.textDocuments.find((document) => document.uri.scheme === 'file' && document.uri.fsPath === filePath);
-    if (openDocument !== undefined) {
-        return openDocument.getText();
-    }
-
-    const stats = await fs.stat(filePath);
-    if (!stats.isFile() || stats.size > maxFileSizeBytes) {
-        return null;
-    }
-
-    return await fs.readFile(filePath, 'utf8');
-}
-
-export type ImportedContextCollectorOptions<TSymbol> = {
-    resolvedPaths: string[];
+export type ImportedContextCollectorOptions = {
+    resolvedTargets: ImportedContextTarget[];
     workspaceRoots: string[];
     abort: AbortSignal;
-    maxFileSizeBytes: number;
-    maxSymbolsPerFile: number;
-    extractSymbols(source: string, abort?: AbortSignal, filePath?: string): Promise<TSymbol[]>;
-    formatContextBlock(fileName: string, symbols: TSymbol[]): string;
+    maxLength: number;
+    formatContextBlock(fileName: string, symbols: string[]): string;
 };
 
-export async function collectImportedContextBlocks<TSymbol>(
-    options: ImportedContextCollectorOptions<TSymbol>,
+function getTargetDisplayName(target: ImportedContextTarget): string {
+    if (target.displayName !== undefined && target.displayName.length > 0) {
+        return target.displayName;
+    }
+
+    const firstFilePath = target.filePaths[0];
+    if (firstFilePath === undefined) {
+        return '';
+    }
+
+    return workspace.asRelativePath(Uri.file(firstFilePath), false);
+}
+
+export async function collectImportedContextBlocks(
+    options: ImportedContextCollectorOptions,
 ): Promise<string[]> {
     const blocks: string[] = [];
+    let totalLength = 0;
 
-    for (const resolvedPath of options.resolvedPaths) {
-        if (options.abort.aborted || !isPathInsideWorkspace(resolvedPath, options.workspaceRoots)) {
+    for (const resolvedTarget of options.resolvedTargets) {
+        if (options.abort.aborted || totalLength >= options.maxLength) {
             break;
         }
 
-        const content = await readWorkspaceContextFile(resolvedPath, options.maxFileSizeBytes);
-        if (content === null) {
+        const displayName = getTargetDisplayName(resolvedTarget);
+        const symbols: string[] = [];
+        let block = '';
+        let targetBudgetReached = false;
+        for (const resolvedPath of deduplicatePaths(resolvedTarget.filePaths)) {
+            if (options.abort.aborted || targetBudgetReached) {
+                break;
+            }
+
+            if (!isPathInsideWorkspace(resolvedPath, options.workspaceRoots)) {
+                continue;
+            }
+
+            const stats = await fs.stat(resolvedPath).catch(() => null);
+            if (stats === null || !stats.isFile() || stats.size > defaultMaxImportedFileSizeBytes) {
+                continue;
+            }
+
+            const fileSymbols = await fileContextRegistry.getSymbols(resolvedPath, options.abort);
+            for (const symbol of fileSymbols) {
+                symbols.push(symbol);
+                const candidateBlock = options.formatContextBlock(displayName, symbols);
+                const separatorLength = blocks.length === 0 ? 0 : 2;
+                if (totalLength + separatorLength + candidateBlock.length > options.maxLength) {
+                    symbols.pop();
+                    targetBudgetReached = true;
+                    break;
+                }
+
+                block = candidateBlock;
+            }
+        }
+
+        if (block.length === 0) {
             continue;
         }
 
-        const symbols = (await options.extractSymbols(content, options.abort, resolvedPath)).slice(0, options.maxSymbolsPerFile);
-        if (symbols.length === 0) {
-            continue;
-        }
-
-        const fileName = workspace.asRelativePath(Uri.file(resolvedPath), false);
-        blocks.push(options.formatContextBlock(fileName, symbols));
+        const separatorLength = blocks.length === 0 ? 0 : 2;
+        blocks.push(block);
+        totalLength += separatorLength + block.length;
     }
 
     return blocks;
@@ -84,9 +114,10 @@ export async function collectImportedContextBlocks<TSymbol>(
 export async function buildImportedContext(
     provider: AnyPrefixAugmentationProvider,
     document: TextDocument,
+    maxLength: number,
     abort: AbortSignal,
 ): Promise<string> {
-    if (!provider.supports(document)) {
+    if (!provider.supports(document) || maxLength <= 0) {
         return '';
     }
 
@@ -96,14 +127,12 @@ export async function buildImportedContext(
     }
 
     const imports = await provider.collectImports(document.getText(), abort, document);
-    const resolvedPaths = await provider.resolveImportPaths(document.uri.fsPath, workspaceRoots, imports);
+    const resolvedTargets = await provider.resolveImportTargets(document.uri.fsPath, workspaceRoots, imports);
     const blocks = await collectImportedContextBlocks({
-        resolvedPaths,
+        resolvedTargets,
         workspaceRoots,
         abort,
-        maxFileSizeBytes: defaultMaxImportedFileSizeBytes,
-        maxSymbolsPerFile: defaultMaxSymbolsPerFile,
-        extractSymbols: provider.extractSymbols,
+        maxLength,
         formatContextBlock: provider.formatContextBlock,
     });
 

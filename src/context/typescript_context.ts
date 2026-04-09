@@ -3,8 +3,10 @@ import type { Node } from 'web-tree-sitter';
 import {
     deduplicatePaths,
     defaultMaxImportedFiles,
+    ImportedContextTarget,
     PrefixAugmentationProvider,
 } from './provider_shared';
+import { fileContextRegistry, LanguageFileParser } from './file_context_registry';
 import { parseTsx, parseTypeScript } from './tree_sitter';
 import { promises as fs } from 'fs';
 import * as path from 'path';
@@ -51,14 +53,6 @@ async function parseTypeScriptLikeSource(
         : await parseTypeScript(source, abort);
 }
 
-async function parseTypeScriptLikeFile(
-    source: string,
-    filePath: string,
-    abort?: AbortSignal,
-): Promise<import('web-tree-sitter').Tree> {
-    return await parseTypeScriptLikeSource(source, isTypeScriptReactFile(filePath) ? 'typescriptreact' : 'typescript', abort);
-}
-
 function stripQuotes(text: string): string {
     if (text.length >= 2 && ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith('\'') && text.endsWith('\'')))) {
         return text.slice(1, -1);
@@ -81,67 +75,134 @@ export async function extractTypeScriptImports(
     abort?: AbortSignal,
     document?: TextDocument,
 ): Promise<TypeScriptImport[]> {
-    const languageId: TypeScriptLanguageId = document?.languageId === 'typescriptreact' ? 'typescriptreact' : 'typescript';
-    const tree = await parseTypeScriptLikeSource(source, languageId, abort);
+    const result = await parseTypeScriptFile(source, abort, document?.languageId);
+    return result.imports;
+}
+
+async function parseTypeScriptFile(
+    source: string,
+    abort?: AbortSignal,
+    languageId?: string,
+): Promise<{ imports: TypeScriptImport[]; symbols: string[] }> {
+    const resolvedLanguageId: TypeScriptLanguageId = languageId === 'typescriptreact' ? 'typescriptreact' : 'typescript';
+    const tree = await parseTypeScriptLikeSource(source, resolvedLanguageId, abort);
 
     try {
         const imports: TypeScriptImport[] = [];
+        const symbols: string[] = [];
+
         for (const child of tree.rootNode.namedChildren) {
-            if (child.type !== 'import_statement') {
-                continue;
-            }
+            if (child.type === 'import_statement') {
+                const sourceNode = child.childForFieldName('source');
+                if (sourceNode !== null) {
+                    const importClause = child.namedChildren.find((namedChild) => namedChild.type === 'import_clause') ?? null;
+                    const importedNames: string[] = [];
+                    let defaultImport: string | null = null;
+                    let namespaceImport: string | null = null;
 
-            const sourceNode = child.childForFieldName('source');
-            if (sourceNode === null) {
-                continue;
-            }
-
-            const importClause = child.namedChildren.find((namedChild) => namedChild.type === 'import_clause') ?? null;
-            const importedNames: string[] = [];
-            let defaultImport: string | null = null;
-            let namespaceImport: string | null = null;
-
-            if (importClause !== null) {
-                for (const clauseChild of importClause.namedChildren) {
-                    if (clauseChild.type === 'identifier') {
-                        defaultImport = clauseChild.text;
-                        continue;
-                    }
-
-                    if (clauseChild.type === 'namespace_import') {
-                        namespaceImport = clauseChild.lastNamedChild?.text ?? null;
-                        continue;
-                    }
-
-                    if (clauseChild.type === 'named_imports') {
-                        for (const specifier of clauseChild.namedChildren) {
-                            if (specifier.type !== 'import_specifier') {
+                    if (importClause !== null) {
+                        for (const clauseChild of importClause.namedChildren) {
+                            if (clauseChild.type === 'identifier') {
+                                defaultImport = clauseChild.text;
                                 continue;
                             }
 
-                            const name = getImportSpecifierName(specifier);
-                            if (name !== null) {
-                                importedNames.push(name);
+                            if (clauseChild.type === 'namespace_import') {
+                                namespaceImport = clauseChild.lastNamedChild?.text ?? null;
+                                continue;
+                            }
+
+                            if (clauseChild.type === 'named_imports') {
+                                for (const specifier of clauseChild.namedChildren) {
+                                    if (specifier.type !== 'import_specifier') {
+                                        continue;
+                                    }
+
+                                    const name = getImportSpecifierName(specifier);
+                                    if (name !== null) {
+                                        importedNames.push(name);
+                                    }
+                                }
                             }
                         }
                     }
+
+                    imports.push({
+                        moduleSpecifier: stripQuotes(sourceNode.text),
+                        importedNames,
+                        defaultImport,
+                        namespaceImport,
+                        isTypeOnly: child.text.startsWith('import type '),
+                    });
                 }
+                continue;
             }
 
-            imports.push({
-                moduleSpecifier: stripQuotes(sourceNode.text),
-                importedNames,
-                defaultImport,
-                namespaceImport,
-                isTypeOnly: child.text.startsWith('import type '),
-            });
+            if (child.type !== 'export_statement') {
+                continue;
+            }
+
+            const declaration = child.childForFieldName('declaration');
+            if (declaration === null) {
+                continue;
+            }
+
+            if (declaration.type === 'function_declaration') {
+                const stub = formatTypeScriptFunctionStub(declaration);
+                if (stub !== null) {
+                    symbols.push(stub);
+                }
+                continue;
+            }
+
+            if (declaration.type === 'class_declaration') {
+                const stub = formatTypeScriptClassStub(declaration);
+                if (stub !== null) {
+                    symbols.push(stub);
+                }
+                continue;
+            }
+
+            if (declaration.type === 'interface_declaration') {
+                const stub = formatTypeScriptInterfaceStub(declaration);
+                if (stub !== null) {
+                    symbols.push(stub);
+                }
+                continue;
+            }
+
+            if (declaration.type === 'type_alias_declaration') {
+                const stub = formatTypeScriptTypeAliasStub(declaration);
+                if (stub !== null) {
+                    symbols.push(stub);
+                }
+                continue;
+            }
+
+            if (declaration.type === 'enum_declaration') {
+                const stub = formatTypeScriptEnumStub(declaration);
+                if (stub !== null) {
+                    symbols.push(stub);
+                }
+                continue;
+            }
+
+            if (declaration.type === 'lexical_declaration') {
+                symbols.push(...formatTypeScriptConstStubs(declaration));
+            }
         }
 
-        return imports;
+        return { imports, symbols };
     } finally {
         tree.delete();
     }
 }
+
+const typescriptFileParser: LanguageFileParser<TypeScriptImport> = {
+    parse: parseTypeScriptFile,
+};
+
+fileContextRegistry.registerParser('typescript', typescriptFileParser);
 
 async function pathExists(filePath: string): Promise<boolean> {
     try {
@@ -341,11 +402,11 @@ function getTypeScriptAliasCandidates(moduleSpecifier: string, config: TypeScrip
     return candidates;
 }
 
-export async function resolveTypeScriptImportPaths(
+export async function resolveTypeScriptImportTargets(
     documentPath: string,
     workspaceRoots: string[],
     imports: TypeScriptImport[],
-): Promise<string[]> {
+): Promise<ImportedContextTarget[]> {
     const candidates: string[] = [];
     const nearestConfig = await findNearestTypeScriptConfig(documentPath, workspaceRoots);
 
@@ -380,7 +441,9 @@ export async function resolveTypeScriptImportPaths(
         }
     }
 
-    return deduplicatePaths(resolvedPaths).slice(0, defaultMaxImportedFiles);
+    return deduplicatePaths(resolvedPaths)
+        .slice(0, defaultMaxImportedFiles)
+        .map((filePath) => ({ filePaths: [filePath] }));
 }
 
 function isPublicTypeScriptMember(node: Node): boolean {
@@ -523,72 +586,6 @@ function formatTypeScriptConstStubs(node: Node): string[] {
     return stubs;
 }
 
-export async function extractTypeScriptSymbols(source: string, abort?: AbortSignal, filePath = 'file.ts'): Promise<string[]> {
-    const tree = await parseTypeScriptLikeFile(source, filePath, abort);
-
-    try {
-        const symbols: string[] = [];
-        for (const child of tree.rootNode.namedChildren) {
-            if (child.type !== 'export_statement') {
-                continue;
-            }
-
-            const declaration = child.childForFieldName('declaration');
-            if (declaration === null) {
-                continue;
-            }
-
-            if (declaration.type === 'function_declaration') {
-                const stub = formatTypeScriptFunctionStub(declaration);
-                if (stub !== null) {
-                    symbols.push(stub);
-                }
-                continue;
-            }
-
-            if (declaration.type === 'class_declaration') {
-                const stub = formatTypeScriptClassStub(declaration);
-                if (stub !== null) {
-                    symbols.push(stub);
-                }
-                continue;
-            }
-
-            if (declaration.type === 'interface_declaration') {
-                const stub = formatTypeScriptInterfaceStub(declaration);
-                if (stub !== null) {
-                    symbols.push(stub);
-                }
-                continue;
-            }
-
-            if (declaration.type === 'type_alias_declaration') {
-                const stub = formatTypeScriptTypeAliasStub(declaration);
-                if (stub !== null) {
-                    symbols.push(stub);
-                }
-                continue;
-            }
-
-            if (declaration.type === 'enum_declaration') {
-                const stub = formatTypeScriptEnumStub(declaration);
-                if (stub !== null) {
-                    symbols.push(stub);
-                }
-                continue;
-            }
-
-            if (declaration.type === 'lexical_declaration') {
-                symbols.push(...formatTypeScriptConstStubs(declaration));
-            }
-        }
-
-        return symbols;
-    } finally {
-        tree.delete();
-    }
-}
-
 export function formatTypeScriptContextBlock(fileName: string, symbols: string[]): string {
     return `// ${fileName}\n${symbols.join('\n')}`;
 }
@@ -602,8 +599,7 @@ export const typescriptPrefixAugmentationProvider: PrefixAugmentationProvider<Ty
         return (document.languageId === 'typescript' || document.languageId === 'typescriptreact') && document.uri.scheme === 'file';
     },
     collectImports: extractTypeScriptImports,
-    resolveImportPaths: resolveTypeScriptImportPaths,
-    extractSymbols: extractTypeScriptSymbols,
+    resolveImportTargets: resolveTypeScriptImportTargets,
     formatContextBlock: formatTypeScriptContextBlock,
     formatActiveFileBlock: formatTypeScriptActiveFileBlock,
 };

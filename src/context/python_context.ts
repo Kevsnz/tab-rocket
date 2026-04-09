@@ -5,8 +5,10 @@ import type { Node } from 'web-tree-sitter';
 import {
     deduplicatePaths,
     defaultMaxImportedFiles,
+    ImportedContextTarget,
     PrefixAugmentationProvider,
 } from './provider_shared';
+import { fileContextRegistry, LanguageFileParser } from './file_context_registry';
 import { parsePython } from './tree_sitter';
 
 const includedDunderMethods = new Set([
@@ -59,10 +61,17 @@ function getRelativeImport(nodeText: string): { level: number; modulePath: strin
 }
 
 export async function extractPythonImports(source: string, abort?: AbortSignal): Promise<PythonImport[]> {
+    const result = await parsePythonFile(source, abort);
+    return result.imports;
+}
+
+async function parsePythonFile(source: string, abort?: AbortSignal): Promise<{ imports: PythonImport[]; symbols: string[] }> {
     const tree = await parsePython(source, abort);
 
     try {
         const imports: PythonImport[] = [];
+        const symbols: string[] = [];
+
         for (const child of tree.rootNode.namedChildren) {
             if (child.type === 'import_statement') {
                 for (const nameNode of child.childrenForFieldName('name')) {
@@ -86,43 +95,72 @@ export async function extractPythonImports(source: string, abort?: AbortSignal):
                 continue;
             }
 
-            if (child.type !== 'import_from_statement') {
+            if (child.type === 'import_from_statement') {
+                const moduleNode = child.childForFieldName('module_name');
+                if (moduleNode !== null) {
+                    const importedNames = child.childrenForFieldName('name')
+                        .map((nameNode) => splitDottedName(
+                            nameNode.type === 'aliased_import' ? getAliasedImportName(nameNode.text) : nameNode.text,
+                        ))
+                        .filter((parts) => parts.length > 0);
+
+                    if (moduleNode.type === 'relative_import') {
+                        const relativeImport = getRelativeImport(moduleNode.text);
+                        imports.push({
+                            level: relativeImport.level,
+                            modulePath: relativeImport.modulePath,
+                            importedNames,
+                        });
+                    } else {
+                        imports.push({
+                            level: 0,
+                            modulePath: splitDottedName(moduleNode.text),
+                            importedNames,
+                        });
+                    }
+                }
                 continue;
             }
 
-            const moduleNode = child.childForFieldName('module_name');
-            if (moduleNode === null) {
-                continue;
+            const definitionNode = child.type === 'decorated_definition'
+                ? child.childForFieldName('definition')
+                : child;
+
+            if (definitionNode !== null) {
+                if (definitionNode.type === 'class_definition') {
+                    const classStub = formatClassStub(definitionNode);
+                    if (classStub !== null) {
+                        symbols.push(classStub);
+                        continue;
+                    }
+                }
+
+                if (definitionNode.type === 'function_definition') {
+                    const functionStub = formatFunctionStub(definitionNode.text, definitionNode);
+                    if (functionStub !== null) {
+                        symbols.push(functionStub);
+                        continue;
+                    }
+                }
             }
 
-            const importedNames = child.childrenForFieldName('name')
-                .map((nameNode) => splitDottedName(
-                    nameNode.type === 'aliased_import' ? getAliasedImportName(nameNode.text) : nameNode.text,
-                ))
-                .filter((parts) => parts.length > 0);
-
-            if (moduleNode.type === 'relative_import') {
-                const relativeImport = getRelativeImport(moduleNode.text);
-                imports.push({
-                    level: relativeImport.level,
-                    modulePath: relativeImport.modulePath,
-                    importedNames,
-                });
-                continue;
+            const assignment = getDirectAssignmentDetails(child);
+            if (assignment !== null && isUppercaseConstant(assignment.name)) {
+                symbols.push(formatAssignmentStub(assignment));
             }
-
-            imports.push({
-                level: 0,
-                modulePath: splitDottedName(moduleNode.text),
-                importedNames,
-            });
         }
 
-        return imports;
+        return { imports, symbols };
     } finally {
         tree.delete();
     }
 }
+
+const pythonFileParser: LanguageFileParser<PythonImport> = {
+    parse: parsePythonFile,
+};
+
+fileContextRegistry.registerParser('python', pythonFileParser);
 
 function isPublicIdentifier(name: string): boolean {
     return !name.startsWith('_');
@@ -227,46 +265,12 @@ function formatClassStub(classNode: Node): string | null {
     return `class ${name}:\n${members.map((member) => `    ${member}`).join('\n')}`;
 }
 
-export async function extractPythonSymbols(source: string, abort?: AbortSignal): Promise<string[]> {
-    const tree = await parsePython(source, abort);
+export function formatPythonContextBlock(fileName: string, symbols: string[]): string {
+    return `# ${fileName}\n${symbols.join('\n')}`;
+}
 
-    try {
-        const symbols: string[] = [];
-        for (const child of tree.rootNode.namedChildren) {
-            const definitionNode = child.type === 'decorated_definition'
-                ? child.childForFieldName('definition')
-                : child;
-
-            if (definitionNode !== null) {
-                if (definitionNode.type === 'class_definition') {
-                    const classStub = formatClassStub(definitionNode);
-                    if (classStub !== null) {
-                        symbols.push(classStub);
-                        continue;
-                    }
-                }
-
-                if (definitionNode.type === 'function_definition') {
-                    const functionStub = formatFunctionStub(definitionNode.text, definitionNode);
-                    if (functionStub !== null) {
-                        symbols.push(functionStub);
-                        continue;
-                    }
-                }
-            }
-
-            const assignment = getDirectAssignmentDetails(child);
-            if (assignment === null || !isUppercaseConstant(assignment.name)) {
-                continue;
-            }
-
-            symbols.push(formatAssignmentStub(assignment));
-        }
-
-        return symbols;
-    } finally {
-        tree.delete();
-    }
+export function formatPythonActiveFileBlock(fileName: string, prefix: string): string {
+    return `# ${fileName}\n${prefix}`;
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -309,11 +313,11 @@ function getRelativeImportBase(documentPath: string, level: number): string | nu
     return basePath;
 }
 
-export async function resolvePythonImportPaths(
+export async function resolvePythonImportTargets(
     documentPath: string,
     workspaceRoots: string[],
     imports: PythonImport[],
-): Promise<string[]> {
+): Promise<ImportedContextTarget[]> {
     const candidates: ResolvedImportCandidate[] = [];
 
     for (const pythonImport of imports) {
@@ -360,15 +364,9 @@ export async function resolvePythonImportPaths(
         }
     }
 
-    return deduplicatePaths(resolvedPaths).slice(0, defaultMaxImportedFiles);
-}
-
-export function formatPythonContextBlock(fileName: string, symbols: string[]): string {
-    return `# ${fileName}\n${symbols.join('\n')}`;
-}
-
-export function formatPythonActiveFileBlock(fileName: string, prefix: string): string {
-    return `# ${fileName}\n${prefix}`;
+    return deduplicatePaths(resolvedPaths)
+        .slice(0, defaultMaxImportedFiles)
+        .map((filePath) => ({ filePaths: [filePath] }));
 }
 
 export const pythonPrefixAugmentationProvider: PrefixAugmentationProvider<PythonImport> = {
@@ -376,8 +374,7 @@ export const pythonPrefixAugmentationProvider: PrefixAugmentationProvider<Python
         return document.languageId === 'python' && document.uri.scheme === 'file';
     },
     collectImports: extractPythonImports,
-    resolveImportPaths: resolvePythonImportPaths,
-    extractSymbols: extractPythonSymbols,
+    resolveImportTargets: resolvePythonImportTargets,
     formatContextBlock: formatPythonContextBlock,
     formatActiveFileBlock: formatPythonActiveFileBlock,
 };

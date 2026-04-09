@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import TreeSitter = require('web-tree-sitter');
 
-type SupportedLanguage = 'python' | 'typescript' | 'tsx';
+type SupportedLanguage = 'go' | 'python' | 'typescript' | 'tsx';
 
 let runtimeInitialization: Promise<void> | null = null;
 const languageInitializations = new Map<SupportedLanguage, Promise<TreeSitter.Language>>();
@@ -21,11 +21,13 @@ function getRuntimeWasmPath(): string {
 }
 
 function getGrammarWasmPath(language: SupportedLanguage): string {
-    const fileName = language === 'python'
-        ? 'tree-sitter-python.wasm'
-        : language === 'typescript'
-            ? 'tree-sitter-typescript.wasm'
-            : 'tree-sitter-tsx.wasm';
+    const fileName = language === 'go'
+        ? 'tree-sitter-go.wasm'
+        : language === 'python'
+            ? 'tree-sitter-python.wasm'
+            : language === 'typescript'
+                ? 'tree-sitter-typescript.wasm'
+                : 'tree-sitter-tsx.wasm';
     return path.join(getBundledAssetsDirectory(), fileName);
 }
 
@@ -83,6 +85,10 @@ async function parseSource(language: SupportedLanguage, source: string, abort?: 
     return tree;
 }
 
+export async function createGoParser(): Promise<TreeSitter.Parser> {
+    return await createParser('go');
+}
+
 export async function createPythonParser(): Promise<TreeSitter.Parser> {
     return await createParser('python');
 }
@@ -93,6 +99,10 @@ export async function createTypeScriptParser(): Promise<TreeSitter.Parser> {
 
 export async function createTsxParser(): Promise<TreeSitter.Parser> {
     return await createParser('tsx');
+}
+
+export async function parseGo(source: string, abort?: AbortSignal): Promise<TreeSitter.Tree> {
+    return await parseSource('go', source, abort);
 }
 
 export async function parsePython(source: string, abort?: AbortSignal): Promise<TreeSitter.Tree> {

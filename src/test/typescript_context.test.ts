@@ -5,10 +5,10 @@ import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises';
 import { TextDocument, Uri } from 'vscode';
 import {
     extractTypeScriptImports,
-    extractTypeScriptSymbols,
     formatTypeScriptContextBlock,
-    resolveTypeScriptImportPaths,
+    resolveTypeScriptImportTargets,
 } from '../context/typescript_context';
+import { fileContextRegistry } from '../context/file_context_registry';
 
 suite('typescript context', () => {
     function createDocument(languageId: string, filePath: string, text: string): TextDocument {
@@ -80,52 +80,68 @@ suite('typescript context', () => {
         ]);
     });
 
-    test('extracts exported TypeScript symbols as declaration-like stubs', async () => {
-        const symbols = await extractTypeScriptSymbols([
-            'export interface User { id: string }',
-            'export type UserId = string',
-            'export const DEFAULT_TIMEOUT: number = 30',
-            'export function fetchUser(id: string): User { return {} as User }',
-            'export class UserService {',
-            '    private secret: string = "x"',
-            '    timeout: number = 1',
-            '    constructor(timeout: number) { this.timeout = timeout }',
-            '    fetch(id: string): User { return {} as User }',
-            '}',
-            'export enum Status { Active, Disabled }',
-            'const hidden = 1',
-        ].join('\n'));
-
-        assert.deepStrictEqual(symbols, [
-            'export interface User { id: string }',
-            'export type UserId = string;',
-            'export const DEFAULT_TIMEOUT: number;',
-            'export function fetchUser(id: string): User;',
-            [
+    test('extracts exported TypeScript symbols as declaration-like stubs from file', async () => {
+        const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'tab-rocket-ts-symbols-'));
+        try {
+            const filePath = path.join(tempRoot, 'module.ts');
+            await writeFile(filePath, [
+                'export interface User { id: string }',
+                'export type UserId = string',
+                'export const DEFAULT_TIMEOUT: number = 30',
+                'export function fetchUser(id: string): User { return {} as User }',
                 'export class UserService {',
-                '    timeout: number;',
-                '    constructor(timeout: number);',
-                '    fetch(id: string): User;',
+                '    private secret: string = "x"',
+                '    timeout: number = 1',
+                '    constructor(timeout: number) { this.timeout = timeout }',
+                '    fetch(id: string): User { return {} as User }',
                 '}',
-            ].join('\n'),
-            'export enum Status { Active, Disabled }',
-        ]);
+                'export enum Status { Active, Disabled }',
+                'const hidden = 1',
+            ].join('\n'), 'utf8');
+
+            const symbols = await fileContextRegistry.getSymbols(filePath);
+
+            assert.deepStrictEqual(symbols, [
+                'export interface User { id: string }',
+                'export type UserId = string;',
+                'export const DEFAULT_TIMEOUT: number;',
+                'export function fetchUser(id: string): User;',
+                [
+                    'export class UserService {',
+                    '    timeout: number;',
+                    '    constructor(timeout: number);',
+                    '    fetch(id: string): User;',
+                    '}',
+                ].join('\n'),
+                'export enum Status { Active, Disabled }',
+            ]);
+        } finally {
+            await rm(tempRoot, { recursive: true, force: true });
+        }
     });
 
-    test('extracts exported TSX symbols from imported tsx files', async () => {
-        const symbols = await extractTypeScriptSymbols([
-            'export interface CardProps { title: string }',
-            'export function Card(props: CardProps) {',
-            '    return <div>{props.title}</div>;',
-            '}',
-            'export const CARD_KIND: string = "primary"',
-        ].join('\n'), undefined, 'Card.tsx');
+    test('extracts exported TSX symbols from imported tsx files via registry', async () => {
+        const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'tab-rocket-tsx-symbols-'));
+        try {
+            const filePath = path.join(tempRoot, 'Card.tsx');
+            await writeFile(filePath, [
+                'export interface CardProps { title: string }',
+                'export function Card(props: CardProps) {',
+                '    return <div>{props.title}</div>;',
+                '}',
+                'export const CARD_KIND: string = "primary"',
+            ].join('\n'), 'utf8');
 
-        assert.deepStrictEqual(symbols, [
-            'export interface CardProps { title: string }',
-            'export function Card(props: CardProps);',
-            'export const CARD_KIND: string;',
-        ]);
+            const symbols = await fileContextRegistry.getSymbols(filePath);
+
+            assert.deepStrictEqual(symbols, [
+                'export interface CardProps { title: string }',
+                'export function Card(props: CardProps);',
+                'export const CARD_KIND: string;',
+            ]);
+        } finally {
+            await rm(tempRoot, { recursive: true, force: true });
+        }
     });
 
     test('formats TypeScript context blocks with a filename header', () => {
@@ -143,7 +159,7 @@ suite('typescript context', () => {
             await writeFile(path.join(tempRoot, 'pkg', 'service', 'index.ts'), 'export const RUN = 1\n', 'utf8');
 
             const documentPath = path.join(tempRoot, 'pkg', 'main.ts');
-            const resolvedPaths = await resolveTypeScriptImportPaths(documentPath, [tempRoot], [
+            const resolvedTargets = await resolveTypeScriptImportTargets(documentPath, [tempRoot], [
                 {
                     moduleSpecifier: '../shared',
                     importedNames: ['SHARED'],
@@ -160,9 +176,9 @@ suite('typescript context', () => {
                 },
             ]);
 
-            assert.deepStrictEqual(resolvedPaths, [
-                path.join(tempRoot, 'shared.ts'),
-                path.join(tempRoot, 'pkg', 'service', 'index.ts'),
+            assert.deepStrictEqual(resolvedTargets, [
+                { filePaths: [path.join(tempRoot, 'shared.ts')] },
+                { filePaths: [path.join(tempRoot, 'pkg', 'service', 'index.ts')] },
             ]);
         } finally {
             await rm(tempRoot, { recursive: true, force: true });
@@ -190,7 +206,7 @@ suite('typescript context', () => {
             ].join('\n'), 'utf8');
 
             const documentPath = path.join(tempRoot, 'src', 'main.ts');
-            const resolvedPaths = await resolveTypeScriptImportPaths(documentPath, [tempRoot], [
+            const resolvedTargets = await resolveTypeScriptImportTargets(documentPath, [tempRoot], [
                 {
                     moduleSpecifier: '@lib/math',
                     importedNames: ['add'],
@@ -207,9 +223,9 @@ suite('typescript context', () => {
                 },
             ]);
 
-            assert.deepStrictEqual(resolvedPaths, [
-                path.join(tempRoot, 'src', 'lib', 'math.ts'),
-                path.join(tempRoot, 'src', 'models', 'user.ts'),
+            assert.deepStrictEqual(resolvedTargets, [
+                { filePaths: [path.join(tempRoot, 'src', 'lib', 'math.ts')] },
+                { filePaths: [path.join(tempRoot, 'src', 'models', 'user.ts')] },
             ]);
         } finally {
             await rm(tempRoot, { recursive: true, force: true });
@@ -230,7 +246,7 @@ suite('typescript context', () => {
             ].join('\n'), 'utf8');
 
             const documentPath = path.join(tempRoot, 'app', 'feature', 'main.ts');
-            const resolvedPaths = await resolveTypeScriptImportPaths(documentPath, [tempRoot], [
+            const resolvedTargets = await resolveTypeScriptImportTargets(documentPath, [tempRoot], [
                 {
                     moduleSpecifier: 'shared/util',
                     importedNames: ['util'],
@@ -240,8 +256,8 @@ suite('typescript context', () => {
                 },
             ]);
 
-            assert.deepStrictEqual(resolvedPaths, [
-                path.join(tempRoot, 'app', 'shared', 'util.ts'),
+            assert.deepStrictEqual(resolvedTargets, [
+                { filePaths: [path.join(tempRoot, 'app', 'shared', 'util.ts')] },
             ]);
         } finally {
             await rm(tempRoot, { recursive: true, force: true });
@@ -254,7 +270,7 @@ suite('typescript context', () => {
             await writeFile(path.join(tempRoot, 'Card.tsx'), 'export function Card() { return <div /> }\n', 'utf8');
             await writeFile(path.join(tempRoot, 'helpers.ts'), 'export function helper() { return 1 }\n', 'utf8');
 
-            const tsResolvedPaths = await resolveTypeScriptImportPaths(path.join(tempRoot, 'main.ts'), [tempRoot], [
+            const tsResolvedTargets = await resolveTypeScriptImportTargets(path.join(tempRoot, 'main.ts'), [tempRoot], [
                 {
                     moduleSpecifier: './Card',
                     importedNames: ['Card'],
@@ -263,7 +279,7 @@ suite('typescript context', () => {
                     isTypeOnly: false,
                 },
             ]);
-            const tsxResolvedPaths = await resolveTypeScriptImportPaths(path.join(tempRoot, 'App.tsx'), [tempRoot], [
+            const tsxResolvedTargets = await resolveTypeScriptImportTargets(path.join(tempRoot, 'App.tsx'), [tempRoot], [
                 {
                     moduleSpecifier: './helpers',
                     importedNames: ['helper'],
@@ -273,8 +289,8 @@ suite('typescript context', () => {
                 },
             ]);
 
-            assert.deepStrictEqual(tsResolvedPaths, [path.join(tempRoot, 'Card.tsx')]);
-            assert.deepStrictEqual(tsxResolvedPaths, [path.join(tempRoot, 'helpers.ts')]);
+            assert.deepStrictEqual(tsResolvedTargets, [{ filePaths: [path.join(tempRoot, 'Card.tsx')] }]);
+            assert.deepStrictEqual(tsxResolvedTargets, [{ filePaths: [path.join(tempRoot, 'helpers.ts')] }]);
         } finally {
             await rm(tempRoot, { recursive: true, force: true });
         }

@@ -15,6 +15,10 @@ async function copyTreeSitterAssets() {
             path.join(treeSitterOutDirectory, 'web-tree-sitter.wasm'),
         ),
         fs.copyFile(
+            require.resolve('tree-sitter-go/tree-sitter-go.wasm'),
+            path.join(treeSitterOutDirectory, 'tree-sitter-go.wasm'),
+        ),
+        fs.copyFile(
             require.resolve('tree-sitter-python/tree-sitter-python.wasm'),
             path.join(treeSitterOutDirectory, 'tree-sitter-python.wasm'),
         ),

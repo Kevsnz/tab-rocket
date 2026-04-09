@@ -1,13 +1,13 @@
 import * as assert from 'assert';
 import * as os from 'os';
 import * as path from 'path';
-import { mkdtemp, mkdir, writeFile } from 'fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises';
 import {
     extractPythonImports,
-    extractPythonSymbols,
     formatPythonContextBlock,
-    resolvePythonImportPaths,
+    resolvePythonImportTargets,
 } from '../context/python_context';
+import { fileContextRegistry } from '../context/file_context_registry';
 
 suite('python context', () => {
     test('extracts Python imports from import and from-import statements', async () => {
@@ -26,71 +26,79 @@ suite('python context', () => {
         ]);
     });
 
-    test('extracts public top-level symbols as valid Python stubs', async () => {
-        const symbols = await extractPythonSymbols([
-            'class Foo:',
-            '    VALUE = 1',
-            '    title: str',
-            '    age: int = 1',
-            '    name = "foo"',
-            '    _PRIVATE = 2',
-            '',
-            '    def __init__(self, title: str):',
-            '        self.title = title',
-            '',
-            '    def run(self, x: int) -> int:',
-            '        return x',
-            '',
-            '    async def load(self) -> str:',
-            '        return None',
-            '',
-            '    @property',
-            '    def title(self) -> str:',
-            '        return "title"',
-            '',
-            '    def _internal(self):',
-            '        return None',
-            '',
-            '    class Nested:',
-            '        pass',
-            '',
-            'def bar(x: int, y = 1) -> int:',
-            '    return x + y',
-            '',
-            'async def baz(value: str) -> str:',
-            '    return value',
-            '',
-            '@decorator',
-            'def qux() -> None:',
-            '    return None',
-            '',
-            'VALUE = 1',
-            '_PRIVATE = 2',
-            '',
-            'def outer() -> int:',
-            '    def inner():',
-            '        return 1',
-            '    return inner()',
-        ].join('\n'));
-
-        assert.deepStrictEqual(symbols, [
-            [
+    test('extracts public top-level symbols as valid Python stubs from file', async () => {
+        const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'tab-rocket-python-symbols-'));
+        try {
+            const filePath = path.join(tempRoot, 'module.py');
+            await writeFile(filePath, [
                 'class Foo:',
-                '    VALUE = ...',
-                '    title: str = ...',
-                '    age: int = ...',
-                '    name = ...',
-                '    def __init__(self, title: str): ...',
-                '    def run(self, x: int) -> int: ...',
-                '    async def load(self) -> str: ...',
-                '    def title(self) -> str: ...',
-            ].join('\n'),
-            'def bar(x: int, y = 1) -> int: ...',
-            'async def baz(value: str) -> str: ...',
-            'def qux() -> None: ...',
-            'VALUE = ...',
-            'def outer() -> int: ...',
-        ]);
+                '    VALUE = 1',
+                '    title: str',
+                '    age: int = 1',
+                '    name = "foo"',
+                '    _PRIVATE = 2',
+                '',
+                '    def __init__(self, title: str):',
+                '        self.title = title',
+                '',
+                '    def run(self, x: int) -> int:',
+                '        return x',
+                '',
+                '    async def load(self) -> str:',
+                '        return None',
+                '',
+                '    @property',
+                '    def title(self) -> str:',
+                '        return "title"',
+                '',
+                '    def _internal(self):',
+                '        return None',
+                '',
+                '    class Nested:',
+                '        pass',
+                '',
+                'def bar(x: int, y = 1) -> int:',
+                '    return x + y',
+                '',
+                'async def baz(value: str) -> str:',
+                '    return value',
+                '',
+                '@decorator',
+                'def qux() -> None:',
+                '    return None',
+                '',
+                'VALUE = 1',
+                '_PRIVATE = 2',
+                '',
+                'def outer() -> int:',
+                '    def inner():',
+                '        return 1',
+                '    return inner()',
+            ].join('\n'), 'utf8');
+
+            const symbols = await fileContextRegistry.getSymbols(filePath);
+
+            assert.deepStrictEqual(symbols, [
+                [
+                    'class Foo:',
+                    '    VALUE = ...',
+                    '    title: str = ...',
+                    '    age: int = ...',
+                    '    name = ...',
+                    '    def __init__(self, title: str): ...',
+                    '    def run(self, x: int) -> int: ...',
+                    '    async def load(self) -> str: ...',
+                    '    def title(self) -> str: ...',
+                ].join('\n'),
+                'def bar(x: int, y = 1) -> int: ...',
+                'async def baz(value: str) -> str: ...',
+                'def qux() -> None: ...',
+                'VALUE = ...',
+                'def outer() -> int: ...',
+            ]);
+        } finally {
+            await rm(tempRoot, { recursive: true, force: true });
+        }
     });
 
     test('formats context blocks with a filename header', () => {
@@ -100,23 +108,31 @@ suite('python context', () => {
         );
     });
 
-    test('preserves multiline function headers in extracted stubs', async () => {
-        const symbols = await extractPythonSymbols([
-            'def build_user(',
-            '    name: str,',
-            '    age: int,',
-            ') -> User:',
-            '    return User(name, age)',
-        ].join('\n'));
-
-        assert.deepStrictEqual(symbols, [
-            [
+    test('preserves multiline function headers in extracted stubs from file', async () => {
+        const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'tab-rocket-python-multiline-'));
+        try {
+            const filePath = path.join(tempRoot, 'module.py');
+            await writeFile(filePath, [
                 'def build_user(',
                 '    name: str,',
                 '    age: int,',
-                ') -> User: ...',
-            ].join('\n'),
-        ]);
+                ') -> User:',
+                '    return User(name, age)',
+            ].join('\n'), 'utf8');
+
+            const symbols = await fileContextRegistry.getSymbols(filePath);
+
+            assert.deepStrictEqual(symbols, [
+                [
+                    'def build_user(',
+                    '    name: str,',
+                    '    age: int,',
+                    ') -> User: ...',
+                ].join('\n'),
+            ]);
+        } finally {
+            await rm(tempRoot, { recursive: true, force: true });
+        }
     });
 
     test('resolves workspace-local absolute and relative imports', async () => {
@@ -126,14 +142,14 @@ suite('python context', () => {
         await writeFile(path.join(tempRoot, 'pkg', 'service.py'), 'def fetch_user():\n    return None\n', 'utf8');
 
         const documentPath = path.join(tempRoot, 'pkg', 'main.py');
-        const resolvedPaths = await resolvePythonImportPaths(documentPath, [tempRoot], [
+        const resolvedTargets = await resolvePythonImportTargets(documentPath, [tempRoot], [
             { level: 0, modulePath: ['foo'], importedNames: null },
             { level: 1, modulePath: ['service'], importedNames: [['fetch_user']] },
         ]);
 
-        assert.deepStrictEqual(resolvedPaths, [
-            path.join(tempRoot, 'foo.py'),
-            path.join(tempRoot, 'pkg', 'service.py'),
+        assert.deepStrictEqual(resolvedTargets, [
+            { filePaths: [path.join(tempRoot, 'foo.py')] },
+            { filePaths: [path.join(tempRoot, 'pkg', 'service.py')] },
         ]);
     });
 
@@ -143,12 +159,12 @@ suite('python context', () => {
         await writeFile(path.join(tempRoot, 'pkg', 'helper.py'), 'def run():\n    return 1\n', 'utf8');
 
         const documentPath = path.join(tempRoot, 'pkg', 'main.py');
-        const resolvedPaths = await resolvePythonImportPaths(documentPath, [tempRoot], [
+        const resolvedTargets = await resolvePythonImportTargets(documentPath, [tempRoot], [
             { level: 1, modulePath: [], importedNames: [['helper']] },
         ]);
 
-        assert.deepStrictEqual(resolvedPaths, [
-            path.join(tempRoot, 'pkg', 'helper.py'),
+        assert.deepStrictEqual(resolvedTargets, [
+            { filePaths: [path.join(tempRoot, 'pkg', 'helper.py')] },
         ]);
     });
 });
